@@ -182,3 +182,7 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
+logs/
+output_dir
+openai__gpt-4o.0.json
+

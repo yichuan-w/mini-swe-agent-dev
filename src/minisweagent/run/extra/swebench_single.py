@@ -14,6 +14,7 @@ from minisweagent.models import get_model
 from minisweagent.run.extra.swebench import (
     DATASET_MAPPING,
     get_sb_environment,
+    update_preds_file,
 )
 from minisweagent.run.utils.save import save_traj
 from minisweagent.utils.log import logger
@@ -58,8 +59,9 @@ def main(
     if exit_immediately:
         config.setdefault("agent", {})["confirm_exit"] = False
     env = get_sb_environment(config, instance)
+    model = get_model(model_name, config.get("model", {}))
     agent = InteractiveAgent(
-        get_model(model_name, config.get("model", {})),
+        model,
         env,
         **({"mode": "yolo"} | config.get("agent", {})),
     )
@@ -73,6 +75,10 @@ def main(
         extra_info = {"traceback": traceback.format_exc()}
     finally:
         save_traj(agent, output, exit_status=exit_status, result=result, extra_info=extra_info)  # type: ignore[arg-type]
+        # Generate preds.json file for submission
+        preds_path = output.parent / "preds.json" if output.is_file() else output / "preds.json"
+        preds_path.parent.mkdir(parents=True, exist_ok=True)
+        update_preds_file(preds_path, instance["instance_id"], model.config.model_name, result or "")
 
 
 if __name__ == "__main__":
