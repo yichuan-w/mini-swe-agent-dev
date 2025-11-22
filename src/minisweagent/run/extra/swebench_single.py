@@ -14,6 +14,7 @@ from minisweagent.models import get_model
 from minisweagent.run.extra.swebench import (
     DATASET_MAPPING,
     get_sb_environment,
+    update_preds_file,
 )
 from minisweagent.run.utils.save import save_traj
 from minisweagent.utils.log import logger
@@ -73,6 +74,9 @@ def main(
         extra_info = {"traceback": traceback.format_exc()}
     finally:
         save_traj(agent, output, exit_status=exit_status, result=result, extra_info=extra_info)  # type: ignore[arg-type]
+        preds_path = output.parent / "preds.json" if output.is_file() else output / "preds.json"
+        preds_path.parent.mkdir(parents=True, exist_ok=True)
+        update_preds_file(preds_path, instance["instance_id"], agent.model.config.model_name, result or "")
 
 
 if __name__ == "__main__":
