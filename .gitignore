@@ -186,3 +186,9 @@ logs/
 output_dir
 openai__gpt-4o.0.json
 
+google-cloud-sdk/
+wise*.json
+vertex-ai.py
+*.gz
+
+run-gemini.sh

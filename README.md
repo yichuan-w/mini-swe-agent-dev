@@ -2,6 +2,29 @@
 <a href="https://mini-swe-agent.com/latest/"><img src="https://github.com/SWE-agent/mini-swe-agent/raw/main/docs/assets/mini-swe-agent-banner.svg" alt="mini-swe-agent banner" style="height: 7em"/></a>
 </div>
 
+# My take
+
+how to run dataset
+```
+mini-extra swebench \
+    --model openai/gpt-5-mini \
+    --subset verified \
+    --split test \
+    --slice 0:20 \
+    --workers 20 \
+    --output output_dir_new
+```
+How to eval
+
+```
+python -m swebench.harness.run_evaluation \
+    --dataset_name princeton-nlp/SWE-bench_Verified \
+    --predictions_path /home/ubuntu/mini-swe-agent/output_dir_high/preds.json \
+    --max_workers 20 \
+    --run_id 20-predict-high
+```
+
+
 # The 100 line AI agent that solves GitHub issues & more
 
 📣 [Gemini 3 Pro reaches 74% on SWE-bench verified with mini-swe-agent!](https://x.com/KLieret/status/1991164693839270372)<br/>

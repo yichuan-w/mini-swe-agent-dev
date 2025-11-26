@@ -40,8 +40,8 @@ class LitellmModel:
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
 
     @retry(
-        stop=stop_after_attempt(int(os.getenv("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "10"))),
-        wait=wait_exponential(multiplier=1, min=4, max=60),
+        stop=stop_after_attempt(int(os.getenv("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "100"))),  # 增加重试次数到100
+        wait=wait_exponential(multiplier=2, min=30, max=600),  # 对于 RateLimitError，等待时间从30秒开始，指数增长到最多600秒（10分钟）
         before_sleep=before_sleep_log(logger, logging.WARNING),
         retry=retry_if_not_exception_type(
             (
@@ -51,18 +51,48 @@ class LitellmModel:
                 litellm.exceptions.ContextWindowExceededError,
                 litellm.exceptions.APIError,
                 litellm.exceptions.AuthenticationError,
-                litellm.exceptions.RateLimitError,
+                # RateLimitError 现在会被重试（已从排除列表中移除）
                 KeyboardInterrupt,
             )
         ),
     )
     def _query(self, messages: list[dict[str, str]], **kwargs):
         try:
+             # For Vertex AI models, ensure credentials and project are properly configured
+            query_kwargs = self.config.model_kwargs | kwargs
+            if self.config.model_name.startswith("vertex_ai/"):
+                # Ensure GOOGLE_APPLICATION_CREDENTIALS is set and use absolute path
+                creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+                if creds_path and not Path(creds_path).is_absolute():
+                    creds_path = str(Path(creds_path).resolve())
+                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+                
+                # Try to get project ID from environment or credentials file
+                project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+                if not project_id and creds_path and Path(creds_path).is_file():
+                    try:
+                        creds_data = json.loads(Path(creds_path).read_text())
+                        project_id = creds_data.get("project_id")
+                        if project_id:
+                            os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+                    except Exception:
+                        pass
+                
+                # Ensure vertex_project and vertex_location are passed explicitly
+                if "vertex_project" not in query_kwargs and project_id:
+                    query_kwargs["vertex_project"] = project_id
+                location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+                if "vertex_location" not in query_kwargs:
+                    query_kwargs["vertex_location"] = location
             return litellm.completion(
-                model=self.config.model_name, messages=messages, **(self.config.model_kwargs | kwargs)
+                model=self.config.model_name, messages=messages, **query_kwargs
             )
         except litellm.exceptions.AuthenticationError as e:
             e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
+            raise e
+        except litellm.exceptions.RateLimitError as e:
+            # 对于 RateLimitError，记录详细信息并重试
+            logger.warning(f"Rate limit exceeded, will retry with exponential backoff: {str(e)[:200]}")
             raise e
 
     def query(self, messages: list[dict[str, str]], **kwargs) -> dict:
