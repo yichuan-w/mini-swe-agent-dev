@@ -2549,8 +2549,8 @@
             <span class="n">litellm</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">litellm_model_registry</span><span class="p">)</span><span class="o">.</span><span class="n">read_text</span><span class="p">()))</span>
 
     <span class="nd">@retry</span><span class="p">(</span>
-        <span class="n">stop</span><span class="o">=</span><span class="n">stop_after_attempt</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT"</span><span class="p">,</span> <span class="s2">"10"</span><span class="p">))),</span>
-        <span class="n">wait</span><span class="o">=</span><span class="n">wait_exponential</span><span class="p">(</span><span class="n">multiplier</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="nb">max</span><span class="o">=</span><span class="mi">60</span><span class="p">),</span>
+        <span class="n">stop</span><span class="o">=</span><span class="n">stop_after_attempt</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT"</span><span class="p">,</span> <span class="s2">"100"</span><span class="p">))),</span>  <span class="c1"># 增加重试次数到100</span>
+        <span class="n">wait</span><span class="o">=</span><span class="n">wait_exponential</span><span class="p">(</span><span class="n">multiplier</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="nb">min</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="nb">max</span><span class="o">=</span><span class="mi">600</span><span class="p">),</span>  <span class="c1"># 对于 RateLimitError，等待时间从30秒开始，指数增长到最多600秒（10分钟）</span>
         <span class="n">before_sleep</span><span class="o">=</span><span class="n">before_sleep_log</span><span class="p">(</span><span class="n">logger</span><span class="p">,</span> <span class="n">logging</span><span class="o">.</span><span class="n">WARNING</span><span class="p">),</span>
         <span class="n">retry</span><span class="o">=</span><span class="n">retry_if_not_exception_type</span><span class="p">(</span>
             <span class="p">(</span>
@@ -2560,18 +2560,48 @@
                 <span class="n">litellm</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">ContextWindowExceededError</span><span class="p">,</span>
                 <span class="n">litellm</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">APIError</span><span class="p">,</span>
                 <span class="n">litellm</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">AuthenticationError</span><span class="p">,</span>
-                <span class="n">litellm</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">RateLimitError</span><span class="p">,</span>
+                <span class="c1"># RateLimitError 现在会被重试（已从排除列表中移除）</span>
                 <span class="ne">KeyboardInterrupt</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="p">),</span>
     <span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_query</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">messages</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="k">try</span><span class="p">:</span>
+             <span class="c1"># For Vertex AI models, ensure credentials and project are properly configured</span>
+            <span class="n">query_kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">model_kwargs</span> <span class="o">|</span> <span class="n">kwargs</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">model_name</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"vertex_ai/"</span><span class="p">):</span>
+                <span class="c1"># Ensure GOOGLE_APPLICATION_CREDENTIALS is set and use absolute path</span>
+                <span class="n">creds_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"GOOGLE_APPLICATION_CREDENTIALS"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">creds_path</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">Path</span><span class="p">(</span><span class="n">creds_path</span><span class="p">)</span><span class="o">.</span><span class="n">is_absolute</span><span class="p">():</span>
+                    <span class="n">creds_path</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">creds_path</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">())</span>
+                    <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"GOOGLE_APPLICATION_CREDENTIALS"</span><span class="p">]</span> <span class="o">=</span> <span class="n">creds_path</span>
+
+                <span class="c1"># Try to get project ID from environment or credentials file</span>
+                <span class="n">project_id</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"GOOGLE_CLOUD_PROJECT"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">project_id</span> <span class="ow">and</span> <span class="n">creds_path</span> <span class="ow">and</span> <span class="n">Path</span><span class="p">(</span><span class="n">creds_path</span><span class="p">)</span><span class="o">.</span><span class="n">is_file</span><span class="p">():</span>
+                    <span class="k">try</span><span class="p">:</span>
+                        <span class="n">creds_data</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">creds_path</span><span class="p">)</span><span class="o">.</span><span class="n">read_text</span><span class="p">())</span>
+                        <span class="n">project_id</span> <span class="o">=</span> <span class="n">creds_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"project_id"</span><span class="p">)</span>
+                        <span class="k">if</span> <span class="n">project_id</span><span class="p">:</span>
+                            <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"GOOGLE_CLOUD_PROJECT"</span><span class="p">]</span> <span class="o">=</span> <span class="n">project_id</span>
+                    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+                        <span class="k">pass</span>
+
+                <span class="c1"># Ensure vertex_project and vertex_location are passed explicitly</span>
+                <span class="k">if</span> <span class="s2">"vertex_project"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">query_kwargs</span> <span class="ow">and</span> <span class="n">project_id</span><span class="p">:</span>
+                    <span class="n">query_kwargs</span><span class="p">[</span><span class="s2">"vertex_project"</span><span class="p">]</span> <span class="o">=</span> <span class="n">project_id</span>
+                <span class="n">location</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"GOOGLE_CLOUD_LOCATION"</span><span class="p">,</span> <span class="s2">"us-central1"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="s2">"vertex_location"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">query_kwargs</span><span class="p">:</span>
+                    <span class="n">query_kwargs</span><span class="p">[</span><span class="s2">"vertex_location"</span><span class="p">]</span> <span class="o">=</span> <span class="n">location</span>
             <span class="k">return</span> <span class="n">litellm</span><span class="o">.</span><span class="n">completion</span><span class="p">(</span>
-                <span class="n">model</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">model_name</span><span class="p">,</span> <span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">,</span> <span class="o">**</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">model_kwargs</span> <span class="o">|</span> <span class="n">kwargs</span><span class="p">)</span>
+                <span class="n">model</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">model_name</span><span class="p">,</span> <span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">,</span> <span class="o">**</span><span class="n">query_kwargs</span>
             <span class="p">)</span>
         <span class="k">except</span> <span class="n">litellm</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">AuthenticationError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
             <span class="n">e</span><span class="o">.</span><span class="n">message</span> <span class="o">+=</span> <span class="s2">" You can permanently set your API key with `mini-extra config set KEY VALUE`."</span>
+            <span class="k">raise</span> <span class="n">e</span>
+        <span class="k">except</span> <span class="n">litellm</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">RateLimitError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="c1"># 对于 RateLimitError，记录详细信息并重试</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Rate limit exceeded, will retry with exponential backoff: </span><span class="si">{</span><span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">)[:</span><span class="mi">200</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
             <span class="k">raise</span> <span class="n">e</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">query</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">messages</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
@@ -2994,36 +3024,36 @@
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>src/minisweagent/models/litellm_model.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tbody><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">68</span>
-<span class="normal">69</span>
-<span class="normal">70</span>
-<span class="normal">71</span>
-<span class="normal">72</span>
-<span class="normal">73</span>
-<span class="normal">74</span>
-<span class="normal">75</span>
-<span class="normal">76</span>
-<span class="normal">77</span>
-<span class="normal">78</span>
-<span class="normal">79</span>
-<span class="normal">80</span>
-<span class="normal">81</span>
-<span class="normal">82</span>
-<span class="normal">83</span>
-<span class="normal">84</span>
-<span class="normal">85</span>
-<span class="normal">86</span>
-<span class="normal">87</span>
-<span class="normal">88</span>
-<span class="normal">89</span>
-<span class="normal">90</span>
-<span class="normal">91</span>
-<span class="normal">92</span>
-<span class="normal">93</span>
-<span class="normal">94</span>
-<span class="normal">95</span>
-<span class="normal">96</span>
-<span class="normal">97</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">query</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">messages</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+              <div class="highlight"><table class="highlighttable"><tbody><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 98</span>
+<span class="normal"> 99</span>
+<span class="normal">100</span>
+<span class="normal">101</span>
+<span class="normal">102</span>
+<span class="normal">103</span>
+<span class="normal">104</span>
+<span class="normal">105</span>
+<span class="normal">106</span>
+<span class="normal">107</span>
+<span class="normal">108</span>
+<span class="normal">109</span>
+<span class="normal">110</span>
+<span class="normal">111</span>
+<span class="normal">112</span>
+<span class="normal">113</span>
+<span class="normal">114</span>
+<span class="normal">115</span>
+<span class="normal">116</span>
+<span class="normal">117</span>
+<span class="normal">118</span>
+<span class="normal">119</span>
+<span class="normal">120</span>
+<span class="normal">121</span>
+<span class="normal">122</span>
+<span class="normal">123</span>
+<span class="normal">124</span>
+<span class="normal">125</span>
+<span class="normal">126</span>
+<span class="normal">127</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">query</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">messages</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
     <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set_cache_control</span><span class="p">:</span>
         <span class="n">messages</span> <span class="o">=</span> <span class="n">set_cache_control</span><span class="p">(</span><span class="n">messages</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set_cache_control</span><span class="p">)</span>
     <span class="n">response</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_query</span><span class="p">(</span><span class="n">messages</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
@@ -3075,8 +3105,8 @@
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>src/minisweagent/models/litellm_model.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tbody><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 99</span>
-<span class="normal">100</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_template_vars</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+              <div class="highlight"><table class="highlighttable"><tbody><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">129</span>
+<span class="normal">130</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_template_vars</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
     <span class="k">return</span> <span class="n">asdict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span> <span class="o">|</span> <span class="p">{</span><span class="s2">"n_model_calls"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_calls</span><span class="p">,</span> <span class="s2">"model_cost"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cost</span><span class="p">}</span>
 </code></pre></div></td></tr></tbody></table></div>
             </details>
